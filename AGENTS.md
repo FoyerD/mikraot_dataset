@@ -6,7 +6,14 @@ logic and can also build decks directly.
 
 Beyond the two main sources, `scripts/build_extra_chapters.py` carves three
 supplemental "missing chapters" (first aid, weapons, communications) out of the
-Quizlet CSV - the technical-training content that the Q&A source lacks.
+Quizlet CSV - the technical-training content that the Q&A source lacks. The
+chapter a Quizlet-only question belongs to is stored in the CSV's `Category`
+column (see below); the deck script reads that column back, so there are no
+separate per-chapter CSVs.
+
+`scripts/mikraot_shared.py` holds the logic shared between the PDF->CSV step and
+the deck builders: the chapter keyword rules / `Category` tagging and the
+answer-matching helpers.
 
 ## Directory layout
 
@@ -33,7 +40,7 @@ The three supplemental chapters are built separately, on top of the Quizlet CSV
 (so run `pdf_to_csv.py` first):
 
 ```sh
-python3 scripts/build_extra_chapters.py   # quizlet csv -> 3 chapter csv/ + extra decks
+python3 scripts/build_extra_chapters.py   # quizlet csv Category -> extra decks
 ```
 
 Requires `poppler-utils` (`pdftotext`) and the `genanki` Python package.
@@ -54,6 +61,12 @@ Question, Answer1..AnswerN, Correct, CorrectAnswer, Type
   correct options joined by `", "` **in the order they appear** (falling back
   to the raw answer text when nothing could be matched).
 * `Type` - `mc` (single correct answer) or `fill-in` (see below).
+* `Category` - **Quizlet CSV only** (the Q&A CSV has no such column). Names the
+  supplemental chapter a Quizlet-only question belongs to -
+  `medical_first_aid` / `weapons_firearms` / `communications_radio` - or
+  `none`. Questions that also appear in the Q&A CSV, or match no chapter
+  keyword, are `none`. `build_extra_chapters.py` reads this column back; the
+  tagging is applied by `pdf_to_csv.py` (`mikraot_shared.bucket_of`).
 
 ## Parsing rules (Quizlet PDF)
 
@@ -93,43 +106,56 @@ Question, Answer1..AnswerN, Correct, CorrectAnswer, Type
 
 A card is `fill-in` when it is **multi-correct** (several options match the
 answer), **open** (no options) or **unresolved** (the answer could not be
-matched to any option). In the decks it becomes a **type-in-the-answer** card
-(`{{type:Back}}`) rendered the same way in both the normal and multichoice
-decks:
+matched to any option - often because the answer text differs only slightly
+from the option, e.g. `מדינת ישראל` vs `ישראל`).
 
-* Front = question
+`fill-in` cards are **never type-in**. They are shown as normal reveal cards in
+*both* decks, so the learner can see the choices:
+
+* Front = question + the options, one per line
 * Back = `CorrectAnswer` (the correct answers joined by `", "`)
 
-`fill-in` notes carry the Anki tag `fill-in`.
+Open questions (no options) simply show the question on the front. All
+`fill-in` notes carry the Anki tag `multi-choice`.
 
 ## Extra chapters (first aid / weapons / communications)
 
 `scripts/build_extra_chapters.py` derives three supplemental chapters from the
 Quizlet CSV - the technical-training content the Q&A source does not cover. It
-takes every Quizlet question whose text is **not** present in
-`csv/mikraot_qa.csv` and buckets it by keyword into:
+reads `csv/mikraot_quizlet.csv` and keeps every row whose `Category` column is
+one of:
 
 * `medical_first_aid` - first aid / trauma (CPR, shock, wounds, bites).
 * `weapons_firearms` - weapons, stoppages, shooting procedure.
 * `communications_radio` - radio sets (`מ.ק`), antennas, frequencies.
 
-Each bucket is written as a wide CSV (`csv/medical_first_aid.csv`, etc.) using
-the same layout as the Q&A CSV (four answer slots, `utf-8-sig`), plus a combined
-`csv/mikraot_extra_chapters.csv` holding all three. Questions matching no bucket
-keyword are dropped and the count is printed. The script then builds a normal
-and a multichoice `.apkg` per bucket, and for the combined set.
+The categories are assigned once, in `pdf_to_csv.py`, by
+`mikraot_shared.bucket_of` (a question already present in `csv/mikraot_qa.csv`,
+or matching no keyword, is `none`). The script writes **no CSVs** - the Quizlet
+CSV *is* the source - and builds a normal and a multichoice `.apkg` per chapter
+plus a combined package (53 / 45 / 42, 140 cards).
 
-Extraction rules:
+Extraction / tagging rules (see `mikraot_shared.py`):
 
-* Keywords are matched as **whole words**, allowing a one-letter prefix
-  (`הירי` matches `ירי`) but never a longer word (`ירי` does not match
-  `אסירי`, `נמק` does not match `נמקם`). Short ambiguous keywords (`מטרה`,
-  `רשת`, `קשר`) are avoided in favour of specific forms (`מטווח`, `בקשר`).
+* Keywords are matched against the **question text** as **whole words**,
+  allowing a one-letter prefix (`הירי` matches `ירי`) but never a longer word
+  (`ירי` does not match `אסירי`, `נמק` does not match `נמקם`). Matching is
+  case-insensitive; keywords containing Latin (`m16`) skip the boundary rule
+  because `pdftotext` glue them to the following Hebrew (`M16איזה`).
+* Short ambiguous keywords (`מטרה`, `רשת`, `קשר`, `שלום`) are avoided in
+  favour of specific forms (`מטווח`, `בקשר`). Both quote spellings are listed
+  where the source mixes them (`הק"ש` / `ההק״ש`).
+* A handful of generic-stem cards carry the topic only in the stem (e.g. `לאיזה
+  חלקים ההכרזה מתחלקת?`, `מה מבין הבאים אינו סכנה הנובעת משט"ד?`); their
+  dedicated keywords (`הכרזה`, `שט"ד`, `המכוון`, `סלילים`) exist purely for
+  those cards.
 * Exact-duplicate questions (the Quizlet export is shuffled and repeats facts)
-  are dropped, keeping the first copy.
-* A card whose correct option falls outside the four slots we keep - e.g. a
-  quizlet card with six options where the answer is option 5 - is emitted as a
-  `fill-in` card instead, so the deck never shows options that omit the answer.
+  are dropped at deck-build time, keeping the first copy.
+
+To re-verify coverage: dump every Quizlet-only question, confirm all remaining
+ones are history/civics/geography, and scan their option text for technical
+terms (`הלם`, `מעצור`, `אנטנה`, …) to catch stems whose options are the only
+signal.
 
 ## Decks
 
@@ -139,19 +165,18 @@ Extraction rules:
 | mikraot_quizlet      | mikraot_quizlet_multichoice.apkg  | מקראות קוויזלט (בחירה מרובה)      | Basic (Mikraot) MultiChoice 1607392320 |
 | mikraot_qa           | mikraot_qa.apkg                   | מקראות                            | Basic (Mikraot Q&A) 1607392321 |
 | mikraot_qa           | mikraot_qa_multichoice.apkg       | מקראות (בחירה מרובה)             | Basic (Mikraot Q&A) MultiChoice 1607392322 |
-| medical_first_aid    | medical_first_aid.apkg            | מקראות - עזרה ראשונה               | Basic (Mikraot Extra) 1607392400 |
-| medical_first_aid    | medical_first_aid_multichoice.apkg| מקראות - עזרה ראשונה (בחירה מרובה)| Basic (Mikraot Extra) MultiChoice 1607392401 |
-| weapons_firearms     | weapons_firearms.apkg             | מקראות - נשק וירי                  | Basic (Mikraot Extra) 1607392402 |
-| weapons_firearms     | weapons_firearms_multichoice.apkg | מקראות - נשק וירי (בחירה מרובה)   | Basic (Mikraot Extra) MultiChoice 1607392403 |
-| communications_radio  | communications_radio.apkg         | מקראות - קשר ותקשורת              | Basic (Mikraot Extra) 1607392404 |
-| communications_radio  | communications_radio_multichoice.apkg | מקראות - קשר ותקשורת (בחירה מרובה)| Basic (Mikraot Extra) MultiChoice 1607392405 |
-| mikraot_extra_chapters | mikraot_extra_chapters.apkg     | מקראות - נושפים משלימים           | Basic (Mikraot Extra Combined) 1607392410 |
-| mikraot_extra_chapters | mikraot_extra_chapters_multichoice.apkg | מקראות - נושפים משלימים (בחירה מרובה) | Basic (Mikraot Extra Combined) MultiChoice 1607392411 |
+| mikraot_quizlet `medical_first_aid`    | medical_first_aid.apkg            | מקראות - עזרה ראשונה               | Basic (Mikraot Extra) 1607392400 |
+| mikraot_quizlet `medical_first_aid`    | medical_first_aid_multichoice.apkg| מקראות - עזרה ראשונה (בחירה מרובה)| Basic (Mikraot Extra) MultiChoice 1607392401 |
+| mikraot_quizlet `weapons_firearms`     | weapons_firearms.apkg             | מקראות - נשק וירי                  | Basic (Mikraot Extra) 1607392402 |
+| mikraot_quizlet `weapons_firearms`     | weapons_firearms_multichoice.apkg | מקראות - נשק וירי (בחירה מרובה)   | Basic (Mikraot Extra) MultiChoice 1607392403 |
+| mikraot_quizlet `communications_radio` | communications_radio.apkg         | מקראות - קשר ותקשורת              | Basic (Mikraot Extra) 1607392404 |
+| mikraot_quizlet `communications_radio` | communications_radio_multichoice.apkg | מקראות - קשר ותקשורת (בחירה מרובה)| Basic (Mikraot Extra) MultiChoice 1607392405 |
+| mikraot_quizlet `Category`≠none | mikraot_extra_chapters.apkg     | מקראות - נושפים משלימים           | Basic (Mikraot Extra Combined) 1607392410 |
+| mikraot_quizlet `Category`≠none | mikraot_extra_chapters_multichoice.apkg | מקראות - נושפים משלימים (בחירה מרובה) | Basic (Mikraot Extra Combined) MultiChoice 1607392411 |
 
 Deck ids: quizlet 2059400110 / 2059400112, QA 2059400114 / 2059400115. Extra
 chapters are `2059400200-2059400202` (normal) and `2059400300-2059400302`
-(multichoice); the combined extra deck is `2059400310` / `2059400410`. The
-shared `fill-in` model is `Fill-in (Mikraot)` id `1607392330`.
+(multichoice); the combined extra deck is `2059400310` / `2059400410`.
 
 The three `medical_first_aid` / `weapons_firearms` / `communications_radio`
 models all share the name `Basic (Mikraot Extra)` but have distinct ids
@@ -160,7 +185,9 @@ combined deck uses `Basic (Mikraot Extra Combined)` `1607392410`/`1607392411`.
 Rebuild the extra decks with `python3 scripts/build_extra_chapters.py`.
 
 * **Normal deck**: Front = question, Back = answer.
-* **MultiChoice deck**: Front = question + numbered options, Back = answer
-  (except `fill-in` cards, which stay type-in-the-answer).
+* **MultiChoice deck**: Front = question + numbered options, Back = answer.
+* **`fill-in` cards** (tag `multi-choice`) are never type-in: they show their
+  options in *both* decks (Front = question + options, Back = `CorrectAnswer`);
+  open questions (no options) show just the question.
 
 genanki also adds an empty `Default` deck to every package; it is harmless.

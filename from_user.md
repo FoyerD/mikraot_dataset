@@ -1,0 +1,3 @@
+# Once you can
+1. Please, to the quizlet csv add category column, and instead of having so many csvs just add category to each 1 (only the ones you categorized already no need to add category to everything, the others can be none or something). then, rewrite the deck making script to simply read the 3 categories from the quizlett dataset. no need to add categories to the QA csv.
+2. look at "מה מבין היתרונות הבאים מיוחס :לתחבושת אישית חדשה בחר 3?". In the card, there are no shows answers so I can't answer it. check if the issue is pdf to csv or csv to card. In such questions, I want the possible asnwers to appeare before me.

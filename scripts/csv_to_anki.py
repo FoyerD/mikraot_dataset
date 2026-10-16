@@ -13,10 +13,15 @@ Card rules (``Type`` column):
 
   * ``mc``       -> regular card.  Normal deck: Front = question,
                     Back = CorrectAnswer.  MultiChoice deck: Front = question
-                    + numbered options, Back = CorrectAnswer.
-  * ``fill-in``  -> type-in-the-answer card (``{{type:Back}}``) in *both*
-                    decks: Front = question, Back = CorrectAnswer (the correct
-                    answers joined by ", ").  The note is tagged ``fill-in``.
+                    + options, Back = CorrectAnswer.
+  * ``fill-in``  -> a card whose answer could not be reduced to a single
+                    correct option (multi-correct "בחר N", an answer that only
+                    partially matched the options, or an open question).  It is
+                    shown as a normal reveal card in *both* decks - never a
+                    type-in: Front = question + its options (one per line),
+                    Back = CorrectAnswer.  Open questions (no options) show just
+                    the question.  These notes carry the Anki tag
+                    ``multi-choice``.
 
 Run with:  python3 scripts/csv_to_anki.py
 """
@@ -31,9 +36,9 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CSV_DIR = os.path.join(BASE_DIR, "csv")
 DECK_DIR = os.path.join(BASE_DIR, "decks")
 
-# Shared model for the multi-correct / open "type in the answer" cards.
-FILLIN_MODEL_ID = 1607392330
-FILLIN_MODEL_NAME = "Fill-in (Mikraot)"
+# Anki tag for the ``fill-in`` cards, which are rendered as reveal cards with
+# their options (one per line) on the front.
+MULTI_TAG = "multi-choice"
 
 # Per-source: output stem -> deck/model configuration.
 SOURCES = {
@@ -64,12 +69,6 @@ SOURCES = {
 BASIC_TEMPLATE = {
     "name": "Card 1",
     "qfmt": "{{Front}}",
-    "afmt": "{{FrontSide}}<hr id=answer>{{Back}}",
-}
-
-FILLIN_TEMPLATE = {
-    "name": "Fill-in",
-    "qfmt": "{{Front}}<br><br>{{type:Back}}",
     "afmt": "{{FrontSide}}<hr id=answer>{{Back}}",
 }
 
@@ -117,7 +116,6 @@ def mc_front(question: str, options: list[str], multi: bool) -> str:
 
 def build_deck(
     model: genanki.Model,
-    fillin_model: genanki.Model,
     deck_id: int,
     deck_name: str,
     apkg_name: str,
@@ -131,17 +129,21 @@ def build_deck(
     for row in rows:
         question = row["Question"]
         answer = row["CorrectAnswer"]
+        options = options_of(header, row)
         if row["Type"] == "fill-in":
+            # Never type-in: show the options (one per line) and reveal the
+            # correct answer(s) on the back.  Open cards simply have no options.
+            front = mc_front(question, options, multi=True)
             deck.add_note(
                 genanki.Note(
-                    model=fillin_model,
-                    fields=[esc(question), esc(answer)],
-                    tags=["fill-in"],
+                    model=model,
+                    fields=[front, esc(answer)],
+                    tags=[MULTI_TAG],
                 )
             )
             fill_count += 1
         else:
-            front = mc_front(question, options_of(header, row), multi)
+            front = mc_front(question, options, multi)
             deck.add_note(
                 genanki.Note(model=model, fields=[front, esc(answer)])
             )
@@ -157,7 +159,6 @@ def build_deck(
 
 def main() -> None:
     os.makedirs(DECK_DIR, exist_ok=True)
-    fillin_model = make_model(FILLIN_MODEL_ID, FILLIN_MODEL_NAME, FILLIN_TEMPLATE)
 
     for stem, config in SOURCES.items():
         header, rows = read_rows(stem)
@@ -166,7 +167,6 @@ def main() -> None:
 
         build_deck(
             make_model(normal_id, normal_name, BASIC_TEMPLATE),
-            fillin_model,
             normal_deck_id,
             normal_deck_name,
             config["normal_apkg"],
@@ -176,7 +176,6 @@ def main() -> None:
         )
         build_deck(
             make_model(multi_id, multi_name, BASIC_TEMPLATE),
-            fillin_model,
             multi_deck_id,
             multi_deck_name,
             config["multi_apkg"],
