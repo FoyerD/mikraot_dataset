@@ -67,6 +67,20 @@ EXTRA_OPTIONS = {
 
 ENTRY = tuple[str, list[str], str]  # (question, options, answer)
 
+# Manual override for a degenerate card (interleaved two-column layout).
+MANUAL_OVERRIDES = {
+    '"תאר את שלבי הכניסה ל"שכב חפה:': (
+        "תאר את שלבי הכניסה ל\"שכב חפה:",
+        [
+            "שלח שתי רגליים בו זמנית ב- 90 מעלות - הנח יד שמאל על הרצפה - הבא כוונת לגובה העיניים - קום מהמצב ללא מגע בין הברכיים לקרקע - בסיום הירי הבט למכלול",
+            "הנח יד שמאל על הרצפה - שלח שתי רגליים בו זמנית ב- 90 מעלות - הבא כוונת לגובה העיניים - בסיום הירי הבט למכלול - קום מהמצב ללא מגע בין הברכיים לקרקע",
+            "הבא כוונת לגובה העיניים - קום מהמצב ללא מגע בין הברכיים לקרקע - שלח שתי רגליים בו זמנית ב- 90 מעלות - הנח יד שמאל על הרצפה - בסיום הירי הבט למכלול",
+            "הבא כוונת לגובה העיניים - קום מהמצב ללא מגע בין הברכיים לקרקע - בסיום הירי הבט למכלול - שלח שתי רגליים בו זמנית ב- 90 מעלות - הנח יד שמאל על הרצפה",
+        ],
+        "הנח יד שמאל על הרצפה - שלח שתי רגליים בו זמנית ב- 90 מעלות - הבא כוונת לגובה העיניים - בסיום הירי הבט למכלול - קום מהמצב ללא מגע בין הברכיים לקרקע",
+    )
+}
+
 
 def find_pdf() -> str:
     path = os.path.join(PDF_DIR, PDF_NAME)
@@ -108,12 +122,37 @@ def clean_field(text: str) -> str:
     return text.strip()
 
 
-def look_like_option(text: str) -> bool:
-    """True if a left-column line starts a multiple-choice option."""
-    text = text.strip()
-    if not text:
+# An option line is marked by a leading dash (in the visual PDF).  The sheet is
+# RTL and ``pdftotext -layout`` returns the text in *logical* order, so that
+# leading dash ends up in the last left-to-right (LRE..PDF) run of the line -
+# which is exactly the visual start of the line.  Dashes *inside* an option
+# (e.g. ``הפשטה-הרחקה``) live in runs that are followed by more Hebrew text and
+# must not start a new option.
+LRE = "\u202a"
+HEB_LETTER = re.compile(r"[\u05d0-\u05ea]")
+
+
+def line_marker(raw_line: str) -> bool:
+    """True if a raw (bidi-marked) left-column line starts an option.
+
+    ``raw_line`` still carries the bidi control characters.  A line is an
+    option start when its final visual run (the text after the last ``LRE``,
+    with no Hebrew following) begins or ends with a dash - that run is the
+    leading marker rendered at the visual start of the RTL line.  The dash
+    must be a *separated token*: a space or a line boundary on the Hebrew
+    side, so glued hyphens inside content (``ב-90``, ``הרצפה-``) do not
+    start a new option.  A Hebrew bullet (``א .``) also starts an option.
+    """
+    stripped = BIDI.sub("", raw_line)
+    if HEB_BULLET.match(stripped):
+        return True
+    index = raw_line.rfind(LRE)
+    if index < 0:
         return False
-    return "-" in text or bool(HEB_BULLET.match(text))
+    if HEB_LETTER.search(raw_line[index + 1:]):
+        return False
+    run = BIDI.sub("", raw_line[index + 1:]).strip()
+    return run.startswith("-") or run.endswith("-")
 
 
 def strip_bullet(text: str) -> str:
@@ -129,25 +168,28 @@ def strip_bullet(text: str) -> str:
 SHORT_SUFFIX = re.compile(r"^[אבגדהוזחטיכלמנסעפצקרשת]{1,2}\d+$")
 
 
-def group_options(lines: list[str]) -> list[str]:
+def group_options(raw_lines: list[str]) -> list[str]:
     """Collapse wrapped option lines into whole options.
 
-    A real option starts on a line carrying a "-" marker; the lines that
-    follow it (without a marker) are its wrapped continuation. Marker-less
-    lines that appear *before* the first option are statements such as
-    "4תשובות נכונות" and are dropped. When no line carries a marker at all
-    (some cards list plain values such as "מ-10"), every line is treated as
-    one option.
+    A real option starts on a line carrying a marker (see ``line_marker``);
+    the lines that follow it (without a marker) are its wrapped continuation.
+    Marker-less lines that appear *before* the first option are statements
+    such as "4תשובות נכונות" and are dropped. When no line carries a marker at
+    all (some cards list plain values such as "מ-10"), every line is treated
+    as one option.
+
+    The incoming lines still carry the bidi control characters; the text is
+    cleaned per line here.
     """
-    lines = [line for line in lines if line.strip()]
+    lines = [line for line in raw_lines if BIDI.sub("", line).strip()]
     if not lines:
         return []
-    marks = [look_like_option(line) for line in lines]
+    marks = [line_marker(line) for line in lines]
     options: list[str] = []
     if any(marks):
         current = None
         for line, marked in zip(lines, marks):
-            piece = clean_field(strip_bullet(line))
+            piece = clean_field(strip_bullet(BIDI.sub("", line)))
             if marked:
                 if current is not None and SHORT_SUFFIX.match(piece):
                     # Wrapped tail such as "ה80": keep it in the option above.
@@ -161,7 +203,7 @@ def group_options(lines: list[str]) -> list[str]:
         if current is not None:
             options.append(current)
     else:
-        options = [clean_field(strip_bullet(line)) for line in lines]
+        options = [clean_field(strip_bullet(BIDI.sub("", line))) for line in lines]
 
     return [option for option in options if option]
 
@@ -183,6 +225,11 @@ def apply_fixups(entries: list[ENTRY]) -> list[ENTRY]:
     fixed: list[ENTRY] = []
     for question, options, answer in entries:
         if any(bad in question for bad in DROP_QUESTIONS):
+            continue
+        # Apply manual overrides first.
+        if question in MANUAL_OVERRIDES:
+            qfixed, ofixed, afixed = MANUAL_OVERRIDES[question]
+            fixed.append((qfixed, list(ofixed), afixed))
             continue
         for key, extra in EXTRA_OPTIONS.items():
             if key in question:
@@ -210,17 +257,21 @@ def parse_entries(text: str) -> list[ENTRY]:
             blocks.append(current)
 
         for block in blocks:
-            lefts: list[str] = []
+            raw_lefts: list[str] = []
             rights: list[str] = []
             for line in block:
-                left, right = split_columns(BIDI.sub("", line))
+                # Keep the bidi control characters on the left column: the
+                # option marker is found from them (see ``line_marker``).
+                left, right = split_columns(line)
                 if left:
-                    lefts.append(left)
+                    raw_lefts.append(left)
+                right = BIDI.sub("", right).strip()
                 if right:
                     rights.append(right)
 
-            if not lefts:
+            if not raw_lefts:
                 continue
+            lefts = [BIDI.sub("", line).strip() for line in raw_lefts]
 
             # True/False cards: a "נכון /לא נכון" label precedes the
             # statement (often joined by a dash that is not an option marker).
@@ -250,8 +301,8 @@ def parse_entries(text: str) -> list[ENTRY]:
                 if end is not None:
                     break
             if end is None:
-                for i, single in enumerate(lefts):
-                    if look_like_option(single):
+                for i, raw in enumerate(raw_lefts):
+                    if line_marker(raw):
                         end = i - 1
                         break
             if end is None:
@@ -268,7 +319,7 @@ def parse_entries(text: str) -> list[ENTRY]:
             elif ":" in question and not question.endswith(":"):
                 question = question.replace(":", "") + ":"
 
-            options = group_options(lefts[end + 1:])
+            options = group_options(raw_lefts[end + 1:])
 
             if not question or not answer:
                 continue

@@ -51,6 +51,14 @@ BIDI = re.compile("[\u200e\u200f\u202a-\u202e\u2066-\u2069]")
 # Card delimiter: the repeated table header row ("answer ... type").
 CARD_HEADER = re.compile(r"^\s*answer\s+type\s*$")
 
+# --- Source quirks that cannot be recovered mechanically -----------------
+# Option/answer replacements, keyed by a question substring: an exact option
+# value (and the answer when it equals that value) is swapped for another.
+# The PDF marks ``11`` as the number of Basic Laws; there are 14.
+REPLACE_OPTIONS = {
+    "כמה חוקי יסוד": [("11", "14")],
+}
+
 ENTRY = tuple[str, list[str], str]  # (question, options, answer)
 
 
@@ -118,6 +126,20 @@ def attach_options(card: dict) -> list[tuple[str, str]]:
     return options
 
 
+def apply_fixups(entries: list[ENTRY]) -> list[ENTRY]:
+    """Apply the source-level corrections in ``REPLACE_OPTIONS``."""
+    fixed: list[ENTRY] = []
+    for question, options, answer in entries:
+        for key, replacements in REPLACE_OPTIONS.items():
+            if key not in question:
+                continue
+            mapping = dict(replacements)
+            options = [mapping.get(option, option) for option in options]
+            answer = mapping.get(answer, answer)
+        fixed.append((question, options, answer))
+    return fixed
+
+
 def parse_entries(text: str) -> list[ENTRY]:
     pages = text.split("\f")
     cards: list[dict] = []
@@ -173,7 +195,7 @@ def parse_entries(text: str) -> list[ENTRY]:
         if not question or not answer:
             continue
         entries.append((question, option_texts, answer))
-    return entries
+    return apply_fixups(entries)
 
 
 def esc(value: str) -> str:

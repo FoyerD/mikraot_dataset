@@ -191,3 +191,16 @@ Rebuild the extra decks with `python3 scripts/build_extra_chapters.py`.
   open questions (no options) show just the question.
 
 genanki also adds an empty `Default` deck to every package; it is harmless.
+## Manual overrides and QA fixups
+
+- `scripts/parse_quizlet.py`: `MANUAL_OVERRIDES` forces correct parsing for the
+  interleaved card `"תאר את שלבי הכניסה ל"שכב חפה:"` (question normalized,
+  4 options, correct answer 2) because the two-column PDF layout cannot be
+  recovered mechanically. Overrides are checked in `apply_fixups()` before other
+  fixups.
+- `scripts/parse_mikraot_qa.py`: `REPLACE_OPTIONS` corrects the known factual
+  error `כמה חוקי יסוד קיימים במדינת ישראל?` → answer `14` (replaces `11`
+  where present). Fix is applied via `apply_fixups()` in `parse_entries()`.
+- Manual overrides take precedence and are idempotent; CSVs are regenerated via
+  `python3 scripts/pdf_to_csv.py` after parser changes.
+
